@@ -1,0 +1,52 @@
+Metadata-Version: 2.4
+Name: wa-whisper
+Version: 0.1.0
+Summary: Push-to-talk dictation utility powered by OpenAI Whisper
+Author: Wise Apple
+License: Proprietary
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: openai-whisper
+Requires-Dist: torch
+Requires-Dist: sounddevice
+Requires-Dist: soundfile
+Requires-Dist: numpy
+Requires-Dist: pynput
+Requires-Dist: PyYAML
+Requires-Dist: word2number
+Requires-Dist: faster-whisper
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+
+# wa_whisper
+
+Early prototype of a push-to-talk dictation utility that mirrors the ergonomics of `wa_parakeet` while using OpenAI Whisper `large-v3` as the ASR backend.
+
+## Quickstart
+
+1. Create the virtual environment:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Launch the push-to-talk loop:
+   ```bash
+   wa-whisper
+   ```
+
+## Status
+
+The prototype currently includes:
+
+- Right-Alt push-to-talk capture with the Parakeet ergonomics you expect.
+- Background worker that runs Whisper `large-v3` with FP16 when CUDA is available.
+- Lightweight text post-processing (number/acronym normalization, punctuation fixes).
+- Optional desktop audio muting via `wpctl`/`pactl` and logging to `~/.cache/wa_whisper`.
+- Placeholder voice isolation hook for upcoming DTLN integration.
+
+Use `scripts/bootstrap.sh` to provision dependencies, then run `wa-whisper` inside an active terminal session. Press Right Alt to dictate; release to transcribe and inject text into the active window. Press `Ctrl+C` (or `Esc` when launched with `--exit-on-esc`) to exit.

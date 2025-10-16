@@ -1,0 +1,13 @@
+openai-whisper
+torch
+sounddevice
+soundfile
+numpy
+pynput
+PyYAML
+word2number
+faster-whisper
+
+[dev]
+pytest
+black

@@ -1,0 +1,20 @@
+[Unit]
+Description=wa_whisper Push-To-Talk Dictation
+After=graphical-session.target sound.target pipewire.service pulseaudio.service
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/wa_whisper
+Environment=DISPLAY=:1
+Environment=XAUTHORITY=%h/.Xauthority
+ExecStartPre=/usr/bin/mkdir -p %h/.cache/wa_whisper
+ExecStart=%h/Documents/wa_whisper/scripts/wa-whisper-start
+ExecStop=%h/Documents/wa_whisper/scripts/wa-whisper-stop
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/.cache/wa_whisper/service.log
+StandardError=append:%h/.cache/wa_whisper/service.log
+
+[Install]
+WantedBy=default.target

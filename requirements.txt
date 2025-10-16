@@ -1,0 +1,17 @@
+# Core speech recognition and model runtime
+openai-whisper
+# Install CUDA-enabled wheel manually if needed
+torch
+
+# Audio capture and processing
+sounddevice
+soundfile
+numpy
+
+# Hotkey handling and automation
+pynput
+PyYAML
+word2number
+
+# Optional accelerated decoder (future optimization)
+faster-whisper

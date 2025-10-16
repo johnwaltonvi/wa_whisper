@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wa-whisper"
+version = "0.1.0"
+description = "Push-to-talk dictation utility powered by OpenAI Whisper"
+readme = "docs/README.md"
+authors = [
+  { name = "Wise Apple" }
+]
+license = { text = "Proprietary" }
+requires-python = ">=3.10"
+dependencies = [
+  "openai-whisper",
+  "torch",
+  "sounddevice",
+  "soundfile",
+  "numpy",
+  "pynput",
+  "PyYAML",
+  "word2number",
+  "faster-whisper"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "black"
+]
+
+[project.scripts]
+wa-whisper = "wa_whisper.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

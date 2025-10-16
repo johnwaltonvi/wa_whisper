@@ -1,0 +1,2 @@
+[console_scripts]
+wa-whisper = wa_whisper.main:main
