@@ -43,10 +43,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--exit-on-esc", action="store_true", default=False, help="Stop listener on ESC.")
     parser.add_argument("--no-voice-isolation", action="store_true", help="Disable placeholder voice isolation.")
     parser.add_argument("--xdotool-path", type=Path, default=None, help="Override xdotool binary path.")
+    parser.add_argument("--disable-complete-beep", action="store_true", help="Disable post-paste completion beep.")
     return parser
 
 
 TaskItem = Optional[Tuple[Path, Optional[RecorderStats]]]
+DEFAULT_BEEP_COMMAND = (
+    Path("/usr/bin/paplay"),
+    Path("/usr/share/sounds/freedesktop/stereo/bell.oga"),
+)
 
 
 def ensure_xdotool(path_override: Optional[Path]) -> Path:
@@ -112,6 +117,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                 normalize_acronyms=not args.disable_acronym_normalization,
                 ensure_punct=not args.disable_punctuation,
                 xdotool_bin=xdotool_bin,
+                enable_beep=not args.disable_complete_beep,
             )
             task_queue.task_done()
 
@@ -175,6 +181,7 @@ def process_capture(
     normalize_acronyms: bool,
     ensure_punct: bool,
     xdotool_bin: Path,
+    enable_beep: bool,
 ) -> None:
     write_log(f"Processing capture {audio_path}", log_path)
     if stats:
@@ -201,7 +208,7 @@ def process_capture(
         if not text:
             write_log("No text produced from transcription", log_path)
             return
-        inject_text(text, xdotool_bin, log_path)
+        inject_text(text, xdotool_bin, log_path, enable_beep=enable_beep)
         write_log(f"Injected text: {text}", log_path)
     except Exception as exc:  # pragma: no cover - defensive log
         write_log(f"Capture processing failed: {exc}", log_path)
@@ -211,7 +218,7 @@ def process_capture(
         audio_path.unlink(missing_ok=True)
 
 
-def inject_text(text: str, xdotool_bin: Path, log_path: Path) -> None:
+def inject_text(text: str, xdotool_bin: Path, log_path: Path, *, enable_beep: bool) -> None:
     try:
         subprocess.run(
             [str(xdotool_bin), "type", "--clearmodifiers", text],
@@ -221,6 +228,26 @@ def inject_text(text: str, xdotool_bin: Path, log_path: Path) -> None:
         )
     except subprocess.CalledProcessError as exc:
         write_log(f"xdotool failed: {exc}", log_path)
+    else:
+        if enable_beep:
+            play_completion_beep(log_path)
+
+
+def play_completion_beep(log_path: Path) -> None:
+    player, sound = DEFAULT_BEEP_COMMAND
+    if not player.exists() or not sound.exists():
+        write_log("Completion beep skipped: paplay or bell sound missing", log_path)
+        return
+    try:
+        subprocess.run(
+            [str(player), str(sound)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", "ignore") if exc.stderr else ""
+        write_log(f"Completion beep failed: {exc}; stderr={stderr.strip()}", log_path)
 
 
 if __name__ == "__main__":
