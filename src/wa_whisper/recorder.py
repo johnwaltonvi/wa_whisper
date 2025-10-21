@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import queue
@@ -17,6 +18,14 @@ import sounddevice as sd
 import soundfile as sf
 
 from .log_utils import write_log
+
+
+class RecorderStartError(Exception):
+    """Raised when the recorder fails to start capturing audio."""
+
+    def __init__(self, message: str, *, attempts: int) -> None:
+        super().__init__(message)
+        self.attempts = attempts
 
 
 @dataclass(slots=True)
@@ -65,12 +74,16 @@ class Recorder:
         log_path: Path,
         rms_threshold: float,
         preamp: float = 1.0,
+        start_retry_attempts: int = 3,
+        start_retry_delay: float = 0.2,
     ) -> None:
         self.sample_rate = sample_rate
         self.device_index = device_index
         self.log_path = log_path
         self.rms_threshold = rms_threshold
         self.preamp = preamp
+        self._start_retry_attempts = max(1, start_retry_attempts)
+        self._start_retry_delay = max(0.0, start_retry_delay)
 
         self._queue: queue.Queue[np.ndarray] = queue.Queue()
         self._stream: sd.InputStream | None = None
@@ -101,41 +114,56 @@ class Recorder:
             if self._running and self._file:
                 return self._file
 
-            tmp_dir = Path(tempfile.gettempdir()) / "wa_whisper"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            fd, filename = tempfile.mkstemp(suffix=".wav", dir=tmp_dir)
-            os.close(fd)  # SoundFile will reopen the path as needed.
-            self._file = Path(filename)
+        last_error: Exception | None = None
 
-            self._writer = sf.SoundFile(
-                str(self._file),
-                mode="w",
-                samplerate=self.sample_rate,
-                channels=1,
-                subtype="PCM_16",
-            )
+        def audio_callback(indata, _frames, _time_info, status):
+            if status:
+                write_log(f"Audio status: {status}", self.log_path)
+            self._queue.put(indata.copy())
 
-            def audio_callback(indata, _frames, _time_info, status):
-                if status:
-                    write_log(f"Audio status: {status}", self.log_path)
-                self._queue.put(indata.copy())
+        for attempt in range(1, self._start_retry_attempts + 1):
+            with self._lock:
+                # Reset state so we always begin from a clean queue.
+                self._queue = queue.Queue()
+                self._prepare_writer()
 
-            self._stream = sd.InputStream(
-                samplerate=self.sample_rate,
-                device=self.device_index,
-                channels=1,
-                dtype="float32",
-                callback=audio_callback,
-            )
-            self._stream.start()
-            self._running = True
-            self._last_audio_time = time.time()
-            self._reset_stats()
+            stream: sd.InputStream | None = None
+            try:
+                stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    device=self.device_index,
+                    channels=1,
+                    dtype="float32",
+                    callback=audio_callback,
+                )
+                stream.start()
+            except Exception as exc:  # pragma: no cover - exercised in tests via stub
+                last_error = exc
+                if stream is not None:
+                    with contextlib.suppress(Exception):
+                        stream.close()
+                self._handle_failed_start(exc=exc, attempt=attempt)
+                continue
 
-            self._worker = threading.Thread(target=self._drain_queue, daemon=True)
-            self._worker.start()
-            write_log(f"Recorder started -> {self._file}", self.log_path)
-            return self._file
+            with self._lock:
+                self._stream = stream
+                self._running = True
+                self._last_audio_time = time.time()
+                self._reset_stats()
+
+                self._worker = threading.Thread(target=self._drain_queue, daemon=True)
+                self._worker.start()
+                write_log(f"Recorder started -> {self._file}", self.log_path)
+                return self._file
+
+            # Success path shouldn't reach here, but guard anyway.
+            break
+
+        attempts = self._start_retry_attempts
+        message = "Input stream failed to start"
+        if last_error:
+            message = f"{message}: {last_error}"
+        raise RecorderStartError(message, attempts=attempts)
 
     def stop(self, timeout: float) -> Path | None:
         """Stop recording after `timeout` seconds of silence."""
@@ -149,18 +177,13 @@ class Recorder:
 
         with self._lock:
             self._running = False
-            if self._stream:
-                self._stream.stop()
-                self._stream.close()
-                self._stream = None
+            self._teardown_stream()
 
         if self._worker:
             self._worker.join()
             self._worker = None
 
-        if self._writer:
-            self._writer.close()
-            self._writer = None
+        self._close_writer(remove_file=False)
 
         stats = self._finalize_stats()
         self._last_stats = stats
@@ -245,3 +268,52 @@ class Recorder:
             total_blocks=self._total_block_count,
             max_speech_streak_ms=self._max_speech_streak_ms,
         )
+
+    # Internal setup/teardown helpers ------------------------------------------------
+
+    def _prepare_writer(self) -> None:
+        self._close_writer(remove_file=True)
+        tmp_dir = Path(tempfile.gettempdir()) / "wa_whisper"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        fd, filename = tempfile.mkstemp(suffix=".wav", dir=tmp_dir)
+        os.close(fd)
+        self._file = Path(filename)
+        self._writer = sf.SoundFile(
+            str(self._file),
+            mode="w",
+            samplerate=self.sample_rate,
+            channels=1,
+            subtype="PCM_16",
+        )
+
+    def _handle_failed_start(self, *, exc: Exception, attempt: int) -> None:
+        attempts = self._start_retry_attempts
+        write_log(
+            f"Recorder start failed (attempt {attempt}/{attempts}): {exc}",
+            self.log_path,
+        )
+        with self._lock:
+            self._running = False
+            self._teardown_stream()
+            self._close_writer(remove_file=True)
+        if attempt < attempts and self._start_retry_delay > 0:
+            time.sleep(self._start_retry_delay)
+
+    def _teardown_stream(self) -> None:
+        if not self._stream:
+            return
+        with contextlib.suppress(Exception):
+            self._stream.stop()
+        with contextlib.suppress(Exception):
+            self._stream.close()
+        self._stream = None
+
+    def _close_writer(self, *, remove_file: bool) -> None:
+        if self._writer:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+            self._writer = None
+        if remove_file and self._file:
+            with contextlib.suppress(FileNotFoundError):
+                self._file.unlink()
+            self._file = None

@@ -11,7 +11,7 @@ from typing import Callable, Optional
 from pynput import keyboard
 
 from .log_utils import write_log
-from .recorder import Recorder, RecorderStats
+from .recorder import Recorder, RecorderStartError, RecorderStats
 
 
 class AudioMuteError(Exception):
@@ -214,7 +214,20 @@ class PushToTalkHotkey:
                     return
                 self._active = True
             self._mute_audio()
-            path = self._recorder.start()
+            try:
+                path = self._recorder.start()
+            except RecorderStartError as exc:
+                with self._lock:
+                    self._active = False
+                self._restore_audio()
+                write_log(f"Recorder could not start: {exc}", self._log_path)
+                return
+            except Exception as exc:  # pragma: no cover - defensive guard
+                with self._lock:
+                    self._active = False
+                self._restore_audio()
+                write_log(f"Unexpected recorder failure: {exc}", self._log_path)
+                return
             write_log(f"Right Alt pressed; recording -> {path}", self._log_path)
         elif self._exit_on_esc and key == keyboard.Key.esc:
             write_log("ESC pressed; terminating listener", self._log_path)
