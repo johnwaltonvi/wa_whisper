@@ -22,6 +22,15 @@ _NUMBER_WORD_PATTERN = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+_BANNED_PHRASES: tuple[str, ...] = (
+    "Thank you.",
+    "Thanks for watching!",
+    "We\u2019ll be right back.",
+)
+
+
+_SENTENCE_SPLIT_PATTERN = re.compile(r"[.!?]+")
+
 
 def _word_to_number(fragment: str) -> str:
     normalized = fragment.replace("-", " ").lower()
@@ -70,6 +79,33 @@ def clean_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def remove_literal_phrases(text: str, phrases: Iterable[str]) -> str:
+    """Remove the provided phrases using literal, case-sensitive matches."""
+    working = text
+    for phrase in phrases:
+        working = working.replace(phrase, "")
+    return clean_whitespace(working)
+
+
+def lowercase_single_sentence(text: str, *, reference: str | None = None) -> str:
+    """Lowercase the sentence when only one exists and drop its trailing period.
+
+    `reference` should be the text prior to enforcing punctuation so we only
+    trigger when the transcription already contained a terminal period.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return stripped
+    reference_text = reference.strip() if reference else stripped
+    fragments = [frag for frag in _SENTENCE_SPLIT_PATTERN.split(reference_text) if frag.strip()]
+    if len(fragments) != 1 or not reference_text.endswith("."):
+        return text
+    if len(reference_text) > 20:
+        return text
+    lowered = stripped.lower()
+    return lowered[:-1]
+
+
 def ensure_sentence_final_punctuation(text: str) -> str:
     """Append a period if the sentence lacks terminal punctuation."""
     if not text:
@@ -90,12 +126,15 @@ def postprocess_text(
     """Run the configured post-processing passes."""
     working = text
     working = clean_whitespace(working)
+    working = remove_literal_phrases(working, _BANNED_PHRASES)
     if normalize_numbers_enabled:
         working = normalize_numbers(working)
     if normalize_acronyms_enabled:
         working = normalize_acronyms(working)
+    reference_before_punct = working
     if ensure_punctuation:
         working = ensure_sentence_final_punctuation(working)
+    working = lowercase_single_sentence(working, reference=reference_before_punct)
     if append_space:
         working = f"{working} "
     return working
